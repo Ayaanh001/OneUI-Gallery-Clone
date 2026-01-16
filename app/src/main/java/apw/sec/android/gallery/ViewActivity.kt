@@ -36,6 +36,7 @@ import androidx.core.widget.addTextChangedListener
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import android.view.KeyEvent
 import androidx.media3.common.util.UnstableApi
 
 @UnstableApi
@@ -56,6 +57,11 @@ class ViewActivity : AppCompatActivity() {
     private var currentVideoUri: Uri? = null
     private val handler = Handler(Looper.getMainLooper())
     private var isUpdatingSeekBar = false
+    private var hasUserUnmuted = false
+    companion object {
+        // Static variable to persist unmute state across activity instances
+        private var sessionUnmuteState = false
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -267,11 +273,39 @@ class ViewActivity : AppCompatActivity() {
         super.onBackPressed()
     }
 
-    private fun initializePlayer() {
-        exoPlayer = ExoPlayer.Builder(this).build().apply {
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        when (keyCode) {
+            KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                // Only handle if current item is a video and player is muted
+                val currentPosition = binding.viewPager.currentItem
+                val mediaFile = imageList[currentPosition]
 
-            // INITIALLY START MUTED
-            volume = 0f
+                if (isVideoFile(mediaFile.uri.toUri())) {
+                    exoPlayer?.let { player ->
+                        if (player.volume == 0f) {
+                            // Unmute the video
+                            player.volume = 1f
+                            hasUserUnmuted = true
+                            sessionUnmuteState = true
+                            binding.videoMuteButton.setImageResource(R.drawable.oui_sound_on)
+
+                            // Let the system handle the actual volume adjustment
+                            return super.onKeyDown(keyCode, event)
+                        }
+                    }
+                }
+            }
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    private fun initializePlayer() {
+        // Restore session state
+        hasUserUnmuted = sessionUnmuteState
+
+        exoPlayer = ExoPlayer.Builder(this).build().apply {
+            // Set initial volume based on session state
+            volume = if (hasUserUnmuted) 1f else 0f
 
             // Set player to loop videos
             repeatMode = Player.REPEAT_MODE_ONE
@@ -291,8 +325,10 @@ class ViewActivity : AppCompatActivity() {
                 }
             })
         }
-        //Initial mute icon
-        binding.videoMuteButton.setImageResource(R.drawable.one_sound_off)
+        // Set initial icon based on session state
+        binding.videoMuteButton.setImageResource(
+            if (hasUserUnmuted) R.drawable.oui_sound_on else R.drawable.one_sound_off
+        )
     }
 
     private fun setupVideoControls() {
@@ -312,35 +348,33 @@ class ViewActivity : AppCompatActivity() {
             exoPlayer?.let { player ->
                 if (player.volume > 0f) {
                     player.volume = 0f
+                    hasUserUnmuted = false
+                    sessionUnmuteState = false
                     binding.videoMuteButton.setImageResource(R.drawable.one_sound_off)
                 } else {
                     player.volume = 1f
+                    hasUserUnmuted = true
+                    sessionUnmuteState = true
                     binding.videoMuteButton.setImageResource(R.drawable.oui_sound_on)
                 }
             }
         }
+
         // SeekBar
         binding.videoSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (fromUser) {
-                    // Cancel any ongoing animation
-
                     seekBarAnimator?.cancel()
-
-                    // Animate the seekbar to the new position
                     exoPlayer?.let { player ->
                         val currentProgress = player.currentPosition.toInt()
-
                         seekBarAnimator = ValueAnimator.ofInt(currentProgress, progress).apply {
-                            duration = 300 // 300ms for smooth animation
+                            duration = 300
                             interpolator = android.view.animation.DecelerateInterpolator()
-
                             addUpdateListener { animator ->
                                 val animatedValue = animator.animatedValue as Int
                                 player.seekTo(animatedValue.toLong())
                                 binding.videoCurrentTime.text = formatTime(animatedValue.toLong())
                             }
-
                             start()
                         }
                     }
@@ -400,6 +434,15 @@ class ViewActivity : AppCompatActivity() {
             }, 100)
 
             player.playWhenReady = true
+
+            // Set volume based on session state
+            if (hasUserUnmuted) {
+                player.volume = 1f
+                binding.videoMuteButton.setImageResource(R.drawable.oui_sound_on)
+            } else {
+                player.volume = 0f
+                binding.videoMuteButton.setImageResource(R.drawable.one_sound_off)
+            }
 
             // Show video controls only if UI is visible
             if (isUIVisible) {
