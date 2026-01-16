@@ -1,0 +1,19 @@
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Background (unfilled part) -->
+    <item android:id="@android:id/background">
+        <shape android:shape="rectangle">
+            <corners android:radius="4dp"/>
+            <solid android:color="#4DFFFFFF"/>
+        </shape>
+    </item>
+
+    <!-- Progress (filled part) with rounded end -->
+    <item android:id="@android:id/progress">
+        <scale android:scaleWidth="100%">
+            <shape android:shape="rectangle">
+                <corners android:radius="4dp"/>
+                <solid android:color="@android:color/white"/>
+            </shape>
+        </scale>
+    </item>
+</layer-list>

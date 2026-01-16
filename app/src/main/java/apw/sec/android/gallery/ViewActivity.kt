@@ -1,18 +1,23 @@
 package apw.sec.android.gallery
+import android.R.attr.duration
+import android.R.attr.repeatMode
+import android.animation.ValueAnimator
 import android.content.*
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.*
 import android.net.*
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import android.provider.Settings
 import android.text.*
 import android.view.*
 import android.widget.Toast
+import android.widget.SeekBar
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.graphics.toColorInt
 import androidx.core.net.toUri
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -23,19 +28,17 @@ import androidx.viewpager2.widget.ViewPager2
 import apw.sec.android.gallery.data.MediaHub
 import apw.sec.android.gallery.databinding.*
 import java.io.*
-import apw.sec.android.gallery.R
-import android.print.PrintAttributes
-import android.print.PrintDocumentAdapter
-import android.print.PrintDocumentInfo
 import android.print.PrintManager
-import android.os.CancellationSignal
-import android.os.ParcelFileDescriptor
-import android.print.PageRange
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
+import android.widget.FrameLayout
 import androidx.core.widget.addTextChangedListener
-import java.io.FileOutputStream
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.common.util.UnstableApi
 
+@UnstableApi
 class ViewActivity : AppCompatActivity() {
     private var _binding: ActivityViewBinding? = null
     private val binding
@@ -48,13 +51,17 @@ class ViewActivity : AppCompatActivity() {
     private var isUIVisible = true
     private var initialTouchY = 0f
     private val SWIPE_THRESHOLD = 100
+    private var seekBarAnimator: ValueAnimator? = null
+    private var exoPlayer: ExoPlayer? = null
+    private var currentVideoUri: Uri? = null
+    private val handler = Handler(Looper.getMainLooper())
+    private var isUpdatingSeekBar = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         _binding = ActivityViewBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // Remove toolbar setup
         binding.fabBack.setOnClickListener { finishWithAnimation() }
 
         binding.root.setOnTouchListener { _, event ->
@@ -93,7 +100,7 @@ class ViewActivity : AppCompatActivity() {
         ViewCompat.setOnApplyWindowInsetsListener(binding.fabBack) { view, insets ->
             val topInset = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
             val params = view.layoutParams as ViewGroup.MarginLayoutParams
-            params.topMargin = topInset + 16 // 16dp base margin + status bar height
+            params.topMargin = topInset + 16
             view.layoutParams = params
             insets
         }
@@ -106,6 +113,10 @@ class ViewActivity : AppCompatActivity() {
         val controller = WindowInsetsControllerCompat(window, binding.root)
         controller.isAppearanceLightStatusBars = false
         controller.isAppearanceLightNavigationBars = false
+
+        // Initialize ExoPlayer
+        initializePlayer()
+        setupVideoControls()
 
         adapter = ImagePagerAdapter(this@ViewActivity, imageList) { toggleUIVisibility() }
         binding.viewPager.adapter = adapter
@@ -123,8 +134,7 @@ class ViewActivity : AppCompatActivity() {
 
         binding.filmStripRecyclerView.post {
             val recyclerWidth = binding.filmStripRecyclerView.width
-
-            val itemWidthPx = resources.displayMetrics.density * 100  // your FilmImageView width
+            val itemWidthPx = resources.displayMetrics.density * 100
             val sidePadding = (recyclerWidth / 2f - itemWidthPx / 2f).toInt()
 
             binding.filmStripRecyclerView.setPadding(
@@ -145,24 +155,27 @@ class ViewActivity : AppCompatActivity() {
                 override fun onPageSelected(position: Int) {
                     filmstripAdapter.setSelectedPosition(position)
                     binding.filmStripRecyclerView.smoothScrollToPosition(position)
-                    updatePlayButtonVisibility(position)
+                    handleMediaChange(position)
+                }
+
+                override fun onPageScrollStateChanged(state: Int) {
+                    if (state == ViewPager2.SCROLL_STATE_IDLE) {
+                        // Attach video surface after scrolling completes
+                        val currentPosition = binding.viewPager.currentItem
+                        val mediaFile = imageList[currentPosition]
+                        if (isVideoFile(mediaFile.uri.toUri())) {
+                            handler.postDelayed({
+                                attachVideoSurface()
+                            }, 100)
+                        }
+                    }
                 }
             }
         )
-
-        // Set play button click listener
-        binding.playButton.setOnClickListener {
-            val currentPosition = binding.viewPager.currentItem
-            val mediaFile = imageList[currentPosition]
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(Uri.parse(mediaFile.uri), "video/*")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            startActivity(intent)
-        }
-
-        // Update play button visibility for initial position
-        updatePlayButtonVisibility(startPosition)
+        // Handle initial media
+        handler.postDelayed({
+            handleMediaChange(startPosition)
+        }, 150)
 
         binding.bottomBar.seslSetGroupDividerEnabled(true)
 
@@ -224,14 +237,246 @@ class ViewActivity : AppCompatActivity() {
         }
     }
 
-    private fun updatePlayButtonVisibility(position: Int) {
-        val mediaFile = imageList[position]
-        val isVideo = isVideoFile(mediaFile.uri.toUri())
-        if (isVideo && isUIVisible) {
-            binding.playButton.visibility = View.VISIBLE
-        } else {
-            binding.playButton.visibility = View.GONE
+    override fun onResume() {
+        super.onResume()
+        // Resume video if current item is a video
+        val currentPosition = binding.viewPager.currentItem
+        val mediaFile = imageList[currentPosition]
+        if (isVideoFile(mediaFile.uri.toUri())) {
+            exoPlayer?.play()
         }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        exoPlayer?.pause()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        stopSeekBarUpdate()
+        seekBarAnimator?.cancel()
+        seekBarAnimator = null
+        exoPlayer?.release()
+        exoPlayer = null
+        _binding = null
+        key?.let { MediaHub.remove(it) }
+    }
+
+    override fun onBackPressed() {
+        super.onBackPressed()
+    }
+
+    private fun initializePlayer() {
+        exoPlayer = ExoPlayer.Builder(this).build().apply {
+
+            // INITIALLY START MUTED
+            volume = 0f
+
+            // Set player to loop videos
+            repeatMode = Player.REPEAT_MODE_ONE
+
+            addListener(object : Player.Listener {
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    updatePlayPauseButton()
+                }
+
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    updatePlayPauseButton()
+                    if (isPlaying) {
+                        startSeekBarUpdate()
+                    } else {
+                        stopSeekBarUpdate()
+                    }
+                }
+            })
+        }
+        //Initial mute icon
+        binding.videoMuteButton.setImageResource(R.drawable.one_sound_off)
+    }
+
+    private fun setupVideoControls() {
+        // Play/Pause button
+        binding.videoPlayPauseButton.setOnClickListener {
+            exoPlayer?.let { player ->
+                if (player.isPlaying) {
+                    player.pause()
+                } else {
+                    player.play()
+                }
+            }
+        }
+
+        // Mute button
+        binding.videoMuteButton.setOnClickListener {
+            exoPlayer?.let { player ->
+                if (player.volume > 0f) {
+                    player.volume = 0f
+                    binding.videoMuteButton.setImageResource(R.drawable.one_sound_off)
+                } else {
+                    player.volume = 1f
+                    binding.videoMuteButton.setImageResource(R.drawable.oui_sound_on)
+                }
+            }
+        }
+        // SeekBar
+        binding.videoSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) {
+                    // Cancel any ongoing animation
+
+                    seekBarAnimator?.cancel()
+
+                    // Animate the seekbar to the new position
+                    exoPlayer?.let { player ->
+                        val currentProgress = player.currentPosition.toInt()
+
+                        seekBarAnimator = ValueAnimator.ofInt(currentProgress, progress).apply {
+                            duration = 300 // 300ms for smooth animation
+                            interpolator = android.view.animation.DecelerateInterpolator()
+
+                            addUpdateListener { animator ->
+                                val animatedValue = animator.animatedValue as Int
+                                player.seekTo(animatedValue.toLong())
+                                binding.videoCurrentTime.text = formatTime(animatedValue.toLong())
+                            }
+
+                            start()
+                        }
+                    }
+                }
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {
+                isUpdatingSeekBar = true
+                stopSeekBarUpdate()
+                seekBarAnimator?.cancel()
+            }
+
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                isUpdatingSeekBar = false
+                exoPlayer?.let { player ->
+                    if (player.isPlaying) {
+                        startSeekBarUpdate()
+                    }
+                }
+            }
+        })
+    }
+
+    private fun handleMediaChange(position: Int) {
+        val mediaFile = imageList[position]
+        val uri = mediaFile.uri.toUri()
+
+        if (isVideoFile(uri)) {
+            playVideo(uri)
+            // Show video controls only if UI is visible
+            if (isUIVisible) {
+                binding.videoControlsContainer.visibility = View.VISIBLE
+            }
+        } else {
+            stopVideo()
+            // Always hide video controls for images
+            binding.videoControlsContainer.visibility = View.GONE
+        }
+    }
+    private fun playVideo(videoUri: Uri) {
+        if (currentVideoUri == videoUri) {
+            exoPlayer?.play()
+            attachVideoSurface()
+            return
+        }
+
+        currentVideoUri = videoUri
+
+        exoPlayer?.let { player ->
+            val mediaItem = MediaItem.fromUri(videoUri)
+            player.setMediaItem(mediaItem)
+            player.prepare()
+
+            // Attach video surface with delay
+            handler.postDelayed({
+                attachVideoSurface()
+            }, 100)
+
+            player.playWhenReady = true
+
+            // Show video controls only if UI is visible
+            if (isUIVisible) {
+                binding.videoControlsContainer.visibility = View.VISIBLE
+            }
+
+            // Get video duration once prepared
+            player.addListener(object : Player.Listener {
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (playbackState == Player.STATE_READY) {
+                        val duration = player.duration
+                        binding.videoSeekBar.max = duration.toInt()
+                        binding.videoDuration.text = formatTime(duration)
+                        player.removeListener(this)
+                    }
+                }
+            })
+        }
+    }
+    private fun attachVideoSurface() {
+        exoPlayer?.let { player ->
+            val currentPosition = binding.viewPager.currentItem
+            val recyclerView = binding.viewPager.getChildAt(0) as? androidx.recyclerview.widget.RecyclerView
+            val viewHolder = recyclerView?.findViewHolderForAdapterPosition(currentPosition) as? ImagePagerAdapter.ViewHolder
+
+            viewHolder?.getVideoSurfaceView()?.let { surfaceView ->
+                player.setVideoSurfaceView(surfaceView)
+                player.addListener(object : Player.Listener {
+                    override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                        adjustVideoSurfaceSize(surfaceView, videoSize.width, videoSize.height)
+                        player.removeListener(this)
+                    }
+                })
+                if (player.videoSize.width > 0 && player.videoSize.height > 0) {
+                    adjustVideoSurfaceSize(surfaceView, player.videoSize.width, player.videoSize.height)
+                }
+            }
+        }
+    }
+
+    private fun adjustVideoSurfaceSize(surfaceView: SurfaceView, videoWidth: Int, videoHeight: Int) {
+        if (videoWidth <= 0 || videoHeight <= 0) return
+
+        surfaceView.post {
+            val parent = surfaceView.parent as? View ?: return@post
+
+            val containerWidth = parent.width
+            val containerHeight = parent.height
+
+            if (containerWidth <= 0 || containerHeight <= 0) return@post
+
+            val videoRatio = videoWidth.toFloat() / videoHeight.toFloat()
+            val containerRatio = containerWidth.toFloat() / containerHeight.toFloat()
+
+            val layoutParams = surfaceView.layoutParams as FrameLayout.LayoutParams
+
+            if (videoRatio > containerRatio) {
+                // Video is wider - fit to width
+                layoutParams.width = containerWidth
+                layoutParams.height = (containerWidth / videoRatio).toInt()
+            } else {
+                // Video is taller - fit to height
+                layoutParams.height = containerHeight
+                layoutParams.width = (containerHeight * videoRatio).toInt()
+            }
+
+            layoutParams.gravity = android.view.Gravity.CENTER
+            surfaceView.layoutParams = layoutParams
+        }
+    }
+
+    private fun stopVideo() {
+        exoPlayer?.stop()
+        exoPlayer?.clearMediaItems()
+        currentVideoUri = null
+        binding.videoControlsContainer.visibility = View.GONE
+        stopSeekBarUpdate()
     }
 
     private fun isVideoFile(uri: Uri): Boolean {
@@ -239,50 +484,87 @@ class ViewActivity : AppCompatActivity() {
         return mimeType?.startsWith("video/") == true
     }
 
-    fun print(imageUri: Uri) {
-        try {
-            val printManager = getSystemService(Context.PRINT_SERVICE) as PrintManager
-            val jobName = "Photo Print"
-
-            // Use PrintHelper for better image printing support
-            val printHelper = androidx.print.PrintHelper(this).apply {
-                scaleMode = androidx.print.PrintHelper.SCALE_MODE_FIT
+    private fun updatePlayPauseButton() {
+        exoPlayer?.let { player ->
+            if (player.isPlaying) {
+                binding.videoPlayPauseButton.setImageResource(R.drawable.oui_pause)
+            } else {
+                binding.videoPlayPauseButton.setImageResource(R.drawable.oui_play)
             }
-
-            try {
-                val bitmap = contentResolver.openInputStream(imageUri)?.use { inputStream ->
-                    BitmapFactory.decodeStream(inputStream)
-                }
-
-                if (bitmap != null) {
-                    printHelper.printBitmap(jobName, bitmap)
-                } else {
-                    Toast.makeText(this, "Unable to load image", Toast.LENGTH_SHORT).show()
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-                Toast.makeText(this, "Error loading image for print", Toast.LENGTH_SHORT).show()
-            }
-
-        } catch (e: Exception) {
-            e.printStackTrace()
-            Toast.makeText(this, "Unable to print image", Toast.LENGTH_SHORT).show()
         }
     }
 
-    fun setAsWallpaper(imageUri: Uri) {
-        try {
-            val intent = Intent(Intent.ACTION_ATTACH_DATA).apply {
-                addCategory(Intent.CATEGORY_DEFAULT)
-                setDataAndType(imageUri, "image/*")
-                putExtra("mimeType", "image/*")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    private fun startSeekBarUpdate() {
+        handler.post(seekBarUpdateRunnable)
+    }
+
+    private fun stopSeekBarUpdate() {
+        handler.removeCallbacks(seekBarUpdateRunnable)
+    }
+
+    private val seekBarUpdateRunnable = object : Runnable {
+        override fun run() {
+            exoPlayer?.let { player ->
+                if (!isUpdatingSeekBar && player.isPlaying) {
+                    binding.videoSeekBar.progress = player.currentPosition.toInt()
+                    binding.videoCurrentTime.text = formatTime(player.currentPosition)
+                }
             }
-            startActivity(Intent.createChooser(intent, "Set as wallpaper"))
+            handler.postDelayed(this, 100) // Update every 100ms
+        }
+    }
+
+    private fun formatTime(timeMs: Long): String {
+        val totalSeconds = timeMs / 1000
+        val minutes = totalSeconds / 60
+        val seconds = totalSeconds % 60
+        return String.format("%d:%02d", minutes, seconds)
+    }
+
+    //Rename functions
+    private fun renameMedia(uri: Uri, newFileName: String, position: Int) {
+        try {
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, newFileName)
+            }
+
+            val rows = contentResolver.update(uri, values, null, null)
+
+            if (rows > 0) {
+                Toast.makeText(this, "Renamed successfully", Toast.LENGTH_SHORT).show()
+
+                imageList[position].name = newFileName
+                adapter.notifyItemChanged(position)
+                filmstripAdapter.notifyItemChanged(position)
+            } else {
+                Toast.makeText(this, "Rename failed", Toast.LENGTH_SHORT).show()
+            }
+        } catch (e: SecurityException) {
+            Toast.makeText(
+                this,
+                "Allow file access permission to rename",
+                Toast.LENGTH_LONG
+            ).show()
+            startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
         } catch (e: Exception) {
             e.printStackTrace()
-            Toast.makeText(this, "Unable to set wallpaper", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Rename error", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private fun getDisplayName(uri: Uri): String {
+        contentResolver.query(
+            uri,
+            arrayOf(MediaStore.MediaColumns.DISPLAY_NAME),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                return cursor.getString(0)
+            }
+        }
+        return "File"
     }
 
     fun deleteImageFromUri(context: Context, imageUri: Uri, pos: Int): Boolean {
@@ -332,6 +614,15 @@ class ViewActivity : AppCompatActivity() {
         }
     }
 
+    fun shareImage(context: Context, imageUri: Uri) {
+        val shareIntent =
+            Intent(Intent.ACTION_SEND).apply {
+                type = "image/*"
+                putExtra(Intent.EXTRA_STREAM, imageUri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        context.startActivity(Intent.createChooser(shareIntent, "Share Image"))
+    }
     fun editImage(context: Context, imageUri: Uri) {
         try {
             var intent = Intent(Intent.ACTION_EDIT)
@@ -341,6 +632,51 @@ class ViewActivity : AppCompatActivity() {
         } catch (e: Exception) {
             e.printStackTrace()
             Toast.makeText(context, "No editor found!", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun print(imageUri: Uri) {
+        try {
+            val printManager = getSystemService(Context.PRINT_SERVICE) as PrintManager
+            val jobName = "Photo Print"
+
+            val printHelper = androidx.print.PrintHelper(this).apply {
+                scaleMode = androidx.print.PrintHelper.SCALE_MODE_FIT
+            }
+
+            try {
+                val bitmap = contentResolver.openInputStream(imageUri)?.use { inputStream ->
+                    BitmapFactory.decodeStream(inputStream)
+                }
+
+                if (bitmap != null) {
+                    printHelper.printBitmap(jobName, bitmap)
+                } else {
+                    Toast.makeText(this, "Unable to load image", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                Toast.makeText(this, "Error loading image for print", Toast.LENGTH_SHORT).show()
+            }
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, "Unable to print image", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun setAsWallpaper(imageUri: Uri) {
+        try {
+            val intent = Intent(Intent.ACTION_ATTACH_DATA).apply {
+                addCategory(Intent.CATEGORY_DEFAULT)
+                setDataAndType(imageUri, "image/*")
+                putExtra("mimeType", "image/*")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(intent, "Set as wallpaper"))
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, "Unable to set wallpaper", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -356,7 +692,6 @@ class ViewActivity : AppCompatActivity() {
         val fileSize = filePath?.let { File(it).length() } ?: 0L
         val fileSizeMB = String.format("%.2f MB", fileSize / (1024.0 * 1024.0))
 
-        // Get date taken and date modified
         var dateTaken: String? = null
         var dateModified: String? = null
         contentResolver.query(imageUri, null, null, null, null)?.use { cursor ->
@@ -386,10 +721,8 @@ class ViewActivity : AppCompatActivity() {
             }
         }
 
-        // Mime type
         val mimeType = contentResolver.getType(imageUri) ?: "Unknown"
 
-        // Build info message
         val message = buildString {
             append("📂 <b>Folder:</b> $folderName<br>")
             append("📄 <b>File Name:</b> $fileName<br>")
@@ -422,7 +755,7 @@ class ViewActivity : AppCompatActivity() {
                 }
                 if (dateModifiedIndex != -1) {
                     val dm = cursor.getLong(dateModifiedIndex)
-                    if (dm > 0) dateModified = dm * 1000 // DATE_MODIFIED is in seconds
+                    if (dm > 0) dateModified = dm * 1000
                 }
             }
         }
@@ -445,7 +778,7 @@ class ViewActivity : AppCompatActivity() {
                 }
                 if (dateModifiedIndex != -1) {
                     val dm = cursor.getLong(dateModifiedIndex)
-                    if (dm > 0) dateModified = dm * 1000 // DATE_MODIFIED is in seconds
+                    if (dm > 0) dateModified = dm * 1000
                 }
             }
         }
@@ -477,16 +810,6 @@ class ViewActivity : AppCompatActivity() {
         return null
     }
 
-    fun shareImage(context: Context, imageUri: Uri) {
-        val shareIntent =
-            Intent(Intent.ACTION_SEND).apply {
-                type = "image/*"
-                putExtra(Intent.EXTRA_STREAM, imageUri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-        context.startActivity(Intent.createChooser(shareIntent, "Share Image"))
-    }
-
     private fun showRenameDialog(media: MediaFile, position: Int) {
         val view = layoutInflater.inflate(R.layout.alert_dialog, null)
         val input = view.findViewById<EditText>(R.id.input)
@@ -511,7 +834,6 @@ class ViewActivity : AppCompatActivity() {
             .create()
 
         dialog.setOnShowListener {
-            // SELECT TEXT AFTER WINDOW ATTACH
             input.post {
                 input.requestFocus()
                 input.setSelection(0, input.text.length)
@@ -547,54 +869,6 @@ class ViewActivity : AppCompatActivity() {
         )
     }
 
-
-    private fun getDisplayName(uri: Uri): String {
-        contentResolver.query(
-            uri,
-            arrayOf(MediaStore.MediaColumns.DISPLAY_NAME),
-            null,
-            null,
-            null
-        )?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                return cursor.getString(0)
-            }
-        }
-        return "File"
-    }
-
-    private fun renameMedia(uri: Uri, newFileName: String, position: Int) {
-        try {
-            val values = ContentValues().apply {
-                put(MediaStore.MediaColumns.DISPLAY_NAME, newFileName)
-            }
-
-            val rows = contentResolver.update(uri, values, null, null)
-
-            if (rows > 0) {
-                Toast.makeText(this, "Renamed successfully", Toast.LENGTH_SHORT).show()
-
-                // Refresh media list
-                imageList[position].name = newFileName
-                adapter.notifyItemChanged(position)
-                filmstripAdapter.notifyItemChanged(position)
-            } else {
-                Toast.makeText(this, "Rename failed", Toast.LENGTH_SHORT).show()
-            }
-        } catch (e: SecurityException) {
-            Toast.makeText(
-                this,
-                "Allow file access permission to rename",
-                Toast.LENGTH_LONG
-            ).show()
-            startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
-        } catch (e: Exception) {
-            e.printStackTrace()
-            Toast.makeText(this, "Rename error", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-
     private fun toggleUIVisibility() {
         val sharedPreferences =
             getSharedPreferences("apw_gallery_preferences", Context.MODE_PRIVATE)
@@ -602,52 +876,51 @@ class ViewActivity : AppCompatActivity() {
 
         val controller = WindowInsetsControllerCompat(window, binding.root)
 
+        // Check if current item is a video
+        val currentPosition = binding.viewPager.currentItem
+        val mediaFile = imageList[currentPosition]
+        val isCurrentVideo = isVideoFile(mediaFile.uri.toUri())
+
         if (isUIVisible) {
-            // Hide app UI elements
+            // Hiding UI
             binding.fabBack.visibility = View.GONE
             binding.bottomBar.visibility = View.GONE
             binding.filmStripRecyclerView.visibility = View.GONE
-            binding.playButton.visibility = View.GONE
+            binding.videoControlsContainer.visibility = View.GONE
 
-            // Hide system bars
             controller.hide(WindowInsetsCompat.Type.systemBars())
             controller.systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
 
             isUIVisible = false
         } else {
-            // Show app UI elements
+            // Showing UI
             binding.fabBack.visibility = View.VISIBLE
             binding.bottomBar.visibility = View.VISIBLE
             if (isFilmstripEnabled) {
                 binding.filmStripRecyclerView.visibility = View.VISIBLE
             }
 
+            // Show video controls ONLY if current item is a video
+            if (isCurrentVideo) {
+                binding.videoControlsContainer.visibility = View.VISIBLE
+            } else {
+                binding.videoControlsContainer.visibility = View.GONE
+            }
+
             isUIVisible = true
 
-            // Show play button if current item is a video
-            val currentPosition = binding.viewPager.currentItem
-            updatePlayButtonVisibility(currentPosition)
-
-            // Show system bars
             controller.show(WindowInsetsCompat.Type.systemBars())
-
-            // Ensure icons stay light on dark background
             controller.isAppearanceLightStatusBars = false
             controller.isAppearanceLightNavigationBars = false
         }
     }
-    override fun onDestroy() {
-        super.onDestroy()
-        _binding = null
-        key?.let { MediaHub.remove(it) }
-    }
 
     private fun finishWithAnimation() {
         val currentItem = binding.viewPager.currentItem
-        binding.viewPager.setCurrentItem(currentItem - 1, true)  // Animate to previous item
+        binding.viewPager.setCurrentItem(currentItem - 1, true)
         binding.viewPager.postDelayed({
             finish()
-        }, 200) // Delay finish slightly to show animation
+        }, 200)
     }
 }
