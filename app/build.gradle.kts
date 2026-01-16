@@ -60,16 +60,16 @@ dependencies {
     implementation("androidx.core:core-ktx:1.10.0")
     implementation("io.github.oneuiproject:design:1.2.3")
     implementation("io.github.oneuiproject.sesl:indexscroll:1.0.3")
-    implementation("io.github.oneuiproject:icons:1.0.1")
     implementation("androidx.core:core-splashscreen:1.0.0")
+    implementation("io.github.oneuiproject:icons:1.1.0")
 
-    // ✅ OneUI SESL Components Only (No AndroidX RecyclerView)
+    // OneUI SESL Components Only
     implementation("io.github.oneuiproject.sesl:appcompat:1.3.0")
     implementation("io.github.oneuiproject.sesl:material:1.4.0")
     implementation("io.github.oneuiproject.sesl:recyclerview:1.3.0")
     implementation("io.github.oneuiproject.sesl:preference:1.1.0")
 
-    // ✅ Media3 Exoplayer — Works with OneUI
+    // Media3 Exoplayer
     implementation("androidx.media3:media3-exoplayer:1.3.1")
     implementation("androidx.media3:media3-ui:1.3.1")
 
