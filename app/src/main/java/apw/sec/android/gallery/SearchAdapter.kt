@@ -18,10 +18,10 @@ class SearchAdapter(
 ) : RecyclerView.Adapter<SearchAdapter.MediaViewHolder>() {
 
     private var filteredList: MutableList<MediaFile> = ArrayList(mediaFiles)
+    private var currentSpanCount: Int = 4 // Default span count
 
     inner class MediaViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val imageView: ImageView = view.findViewById(R.id.imageView)
-        val playButton: ImageView = view.findViewById(R.id.playButton)
         val videoDurationOverlay: LinearLayout = view.findViewById(R.id.videoDurationOverlay)
         val videoDurationText: TextView = view.findViewById(R.id.videoDuration)
 
@@ -54,6 +54,13 @@ class SearchAdapter(
         notifyDataSetChanged()
     }
 
+    fun updateSpanCount(spanCount: Int) {
+        if (currentSpanCount != spanCount) {
+            currentSpanCount = spanCount
+            notifyItemRangeChanged(0, itemCount)
+        }
+    }
+
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): MediaViewHolder {
         val view = LayoutInflater.from(parent.context)
             .inflate(R.layout.image_item, parent, false)
@@ -64,18 +71,19 @@ class SearchAdapter(
         val mediaFile = filteredList[position]
 
         if (mediaFile.isVideo()) {
-            // Hide center play button
-            holder.playButton.visibility = View.GONE
+            // Show duration overlay only if span count is 6 or less
+            if (currentSpanCount <= 6) {
+                holder.videoDurationOverlay.visibility = View.VISIBLE
 
-            // Show duration overlay
-            holder.videoDurationOverlay.visibility = View.VISIBLE
-
-            // Format and set duration
-            val duration = mediaFile.duration ?: 0L
-            holder.videoDurationText.text = formatDuration(duration)
+                // Format and set duration
+                val duration = mediaFile.duration ?: 0L
+                holder.videoDurationText.text = formatDuration(duration)
+            } else {
+                // Hide duration for span count > 6 (i.e., span count 9)
+                holder.videoDurationOverlay.visibility = View.GONE
+            }
         } else {
-            // Hide both for images
-            holder.playButton.visibility = View.GONE
+            // Hide for images
             holder.videoDurationOverlay.visibility = View.GONE
         }
 

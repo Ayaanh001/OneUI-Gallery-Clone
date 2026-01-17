@@ -72,7 +72,7 @@ class GroupAlbumsFragment : Fragment() {
             context = requireContext(),
             recyclerView = recyclerView,
             minSpanCount = 2,
-            maxSpanCount = 4,
+            maxSpanCount = 3,
             currentSpanCount = savedSpanCount,
             onSpanCountChanged = { newSpanCount ->
                 sharedPreferences.edit()

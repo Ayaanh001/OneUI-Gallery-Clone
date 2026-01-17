@@ -72,13 +72,26 @@ class AlbumViewer: AppCompatActivity(){
     }
 
     private fun setupPinchToZoom(savedSpanCount: Int) {
+        val allowedSpanCounts = listOf(2, 3, 4, 5, 6, 9)
+
+        val initialSpanCount = allowedSpanCounts.minByOrNull {
+            kotlin.math.abs(it - savedSpanCount)
+        } ?: 4
+
+        // Update adapter with initial span count
+        adapter.updateSpanCount(initialSpanCount)
+
         pinchHelper = PinchToZoomHelper(
             context = this,
             recyclerView = binding.recyclerView,
-            minSpanCount = 2,
-            maxSpanCount = 9,
-            currentSpanCount = savedSpanCount,
+            minSpanCount = allowedSpanCounts.first(),
+            maxSpanCount = allowedSpanCounts.last(),
+            currentSpanCount = initialSpanCount,
+            allowedSpanCounts = allowedSpanCounts,
             onSpanCountChanged = { newSpanCount ->
+                // Update adapter to show/hide video durations
+                adapter.updateSpanCount(newSpanCount)
+
                 // Save the new span count
                 sharedPreferences.edit()
                     .putInt(PREF_ALBUM_DETAIL_SPAN_COUNT, newSpanCount)
@@ -86,7 +99,6 @@ class AlbumViewer: AppCompatActivity(){
             }
         )
 
-        // Intercept touch events
         binding.recyclerView.addOnItemTouchListener(object : RecyclerView.OnItemTouchListener {
             override fun onInterceptTouchEvent(rv: RecyclerView, e: MotionEvent): Boolean {
                 return pinchHelper.onTouchEvent(e)

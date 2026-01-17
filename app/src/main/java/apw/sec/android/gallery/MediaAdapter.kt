@@ -4,7 +4,6 @@ import android.content.Intent
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
@@ -18,9 +17,10 @@ class MediaAdapter(
     private val mediaFiles: MutableList<MediaFile>
 ) : RecyclerView.Adapter<MediaAdapter.MediaViewHolder>() {
 
+    private var currentSpanCount: Int = 4 // Default span count
+
     inner class MediaViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val imageView: Image = view.findViewById(R.id.imageView)
-        val playButton: ImageView = view.findViewById(R.id.playButton)
         val videoDurationOverlay: LinearLayout = view.findViewById(R.id.videoDurationOverlay)
         val videoDurationText: TextView = view.findViewById(R.id.videoDuration)
 
@@ -48,18 +48,19 @@ class MediaAdapter(
         val mediaFile = mediaFiles[position]
 
         if (mediaFile.isVideo()) {
-            // Hide center play button
-            holder.playButton.visibility = View.GONE
+            // Show duration overlay only if span count is 6 or less
+            if (currentSpanCount <= 6) {
+                holder.videoDurationOverlay.visibility = View.VISIBLE
 
-            // Show duration overlay
-            holder.videoDurationOverlay.visibility = View.VISIBLE
-
-            // Format and set duration
-            val duration = mediaFile.duration ?: 0L
-            holder.videoDurationText.text = formatDuration(duration)
+                // Format and set duration
+                val duration = mediaFile.duration ?: 0L
+                holder.videoDurationText.text = formatDuration(duration)
+            } else {
+                // Hide duration for span count > 6 (i.e., span count 9)
+                holder.videoDurationOverlay.visibility = View.GONE
+            }
         } else {
-            // Hide both for images
-            holder.playButton.visibility = View.GONE
+            // Hide for images
             holder.videoDurationOverlay.visibility = View.GONE
         }
 
@@ -71,6 +72,14 @@ class MediaAdapter(
     }
 
     override fun getItemCount(): Int = mediaFiles.size
+
+    // Method to update span count and refresh items
+    fun updateSpanCount(spanCount: Int) {
+        if (currentSpanCount != spanCount) {
+            currentSpanCount = spanCount
+            notifyItemRangeChanged(0, itemCount)
+        }
+    }
 
     private fun formatDuration(durationMs: Long): String {
         val seconds = (durationMs / 1000).toInt()

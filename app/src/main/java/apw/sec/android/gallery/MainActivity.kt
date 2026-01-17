@@ -328,8 +328,6 @@
         }
 
         companion object {
-// Replace your existing MainFrag class in MainActivity.kt with this:
-
             class MainFrag : Fragment() {
                 private lateinit var mediaList: MutableList<MediaFile>
                 private lateinit var adapter: MediaAdapter
@@ -365,12 +363,18 @@
                     val recyclerView = view.findViewById<RecyclerView>(R.id.recycler_view)
                     // Load saved span count
                     val savedSpanCount = sharedPreferences.getInt(PREF_PICTURES_SPAN_COUNT, DEFAULT_SPAN_COUNT)
-                    recyclerView.layoutManager = GridLayoutManager(context, savedSpanCount)
+                    val allowedSpanCounts = listOf(2, 3, 4, 6, 8)
+                    val initialSpanCount = allowedSpanCounts.minByOrNull {
+                        kotlin.math.abs(it - savedSpanCount)
+                    } ?: 4
+
+                    recyclerView.layoutManager = GridLayoutManager(context, initialSpanCount)
                     loadImages()
+                    adapter.updateSpanCount(initialSpanCount)
                     recyclerView.adapter = adapter
 
-                    updateItemDecoration(recyclerView, savedSpanCount)
-                    setupPinchToZoom(recyclerView, savedSpanCount)
+                    updateItemDecoration(recyclerView, initialSpanCount)
+                    setupPinchToZoom(recyclerView, initialSpanCount)
                 }
 
                 private fun updateItemDecoration(recyclerView: RecyclerView, spanCount: Int) {
@@ -381,13 +385,27 @@
                 }
 
                 private fun setupPinchToZoom(recyclerView: RecyclerView, savedSpanCount: Int) {
+                    val allowedSpanCounts = listOf(2, 3, 4, 6, 9)
+
+                    // Find the closest allowed span count
+                    val initialSpanCount = allowedSpanCounts.minByOrNull {
+                        kotlin.math.abs(it - savedSpanCount)
+                    } ?: 4
+
+                    // Update adapter with initial span count
+                    adapter.updateSpanCount(initialSpanCount)
+
                     pinchHelper = PinchToZoomHelper(
                         context = requireContext(),
                         recyclerView = recyclerView,
-                        minSpanCount = 2,
-                        maxSpanCount = 6,
-                        currentSpanCount = savedSpanCount,
+                        minSpanCount = allowedSpanCounts.first(),
+                        maxSpanCount = allowedSpanCounts.last(),
+                        currentSpanCount = initialSpanCount,
+                        allowedSpanCounts = allowedSpanCounts,
                         onSpanCountChanged = { newSpanCount ->
+                            // Update adapter to show/hide video durations
+                            adapter.updateSpanCount(newSpanCount)
+
                             // Save the new span count
                             sharedPreferences.edit()
                                 .putInt(PREF_PICTURES_SPAN_COUNT, newSpanCount)
@@ -453,13 +471,18 @@
 
                     // Load saved span count
                     val savedSpanCount = sharedPreferences.getInt(PREF_SEARCH_SPAN_COUNT, DEFAULT_SPAN_COUNT)
+                    val allowedSpanCounts = listOf(2, 3, 4, 6, 8)
+                    val initialSpanCount = allowedSpanCounts.minByOrNull {
+                        kotlin.math.abs(it - savedSpanCount)
+                    } ?: 4
 
-                    recyclerView.layoutManager = GridLayoutManager(context, savedSpanCount)
+                    recyclerView.layoutManager = GridLayoutManager(context, initialSpanCount)
                     loadImages()
+                    adapter.updateSpanCount(initialSpanCount)
                     recyclerView.adapter = adapter
 
-                    updateItemDecoration(recyclerView, savedSpanCount)
-                    setupPinchToZoom(recyclerView, savedSpanCount)
+                    updateItemDecoration(recyclerView, initialSpanCount)
+                    setupPinchToZoom(recyclerView, initialSpanCount)
                 }
 
                 private fun updateItemDecoration(recyclerView: RecyclerView, spanCount: Int) {
@@ -471,13 +494,26 @@
                 }
 
                 private fun setupPinchToZoom(recyclerView: RecyclerView, savedSpanCount: Int) {
+                    val allowedSpanCounts = listOf(2, 3, 4, 6, 9)
+
+                    val initialSpanCount = allowedSpanCounts.minByOrNull {
+                        kotlin.math.abs(it - savedSpanCount)
+                    } ?: 4
+
+                    // Update adapter with initial span count
+                    adapter.updateSpanCount(initialSpanCount)
+
                     pinchHelper = PinchToZoomHelper(
                         context = requireContext(),
                         recyclerView = recyclerView,
-                        minSpanCount = 3,
-                        maxSpanCount = 6,
-                        currentSpanCount = savedSpanCount,
+                        minSpanCount = allowedSpanCounts.first(),
+                        maxSpanCount = allowedSpanCounts.last(),
+                        currentSpanCount = initialSpanCount,
+                        allowedSpanCounts = allowedSpanCounts,
                         onSpanCountChanged = { newSpanCount ->
+                            // Update adapter to show/hide video durations
+                            adapter.updateSpanCount(newSpanCount)
+
                             sharedPreferences.edit()
                                 .putInt(PREF_SEARCH_SPAN_COUNT, newSpanCount)
                                 .apply()
