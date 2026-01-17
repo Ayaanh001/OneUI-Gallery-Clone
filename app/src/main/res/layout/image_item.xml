@@ -52,7 +52,7 @@
     <ImageView
         android:layout_height="24dp"
         android:layout_width="24dp"
-        android:src="@drawable/play"
+        android:src="@drawable/oui_play"
         android:id="@+id/playButton"
         android:visibility="gone"
         android:layout_gravity="center" />
