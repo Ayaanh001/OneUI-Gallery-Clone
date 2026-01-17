@@ -1,12 +1,14 @@
 package apw.sec.android.gallery
 
+import android.content.Context
 import android.os.Bundle
+import android.view.MotionEvent
 import androidx.appcompat.app.AppCompatActivity
 import apw.sec.android.gallery.databinding.*
 import androidx.recyclerview.widget.*
 import android.util.Log
-import androidx.lifecycle.*
 import apw.sec.android.gallery.data.MediaHub
+import apw.sec.android.gallery.utils.PinchToZoomHelper
 
 class AlbumViewer: AppCompatActivity(){
 
@@ -14,6 +16,10 @@ class AlbumViewer: AppCompatActivity(){
     private val binding get() = _binding!!
     private lateinit var mediaFiles: MutableList<MediaFile>
     private lateinit var adapter: MediaAdapter
+    private lateinit var pinchHelper: PinchToZoomHelper
+    private lateinit var sharedPreferences: android.content.SharedPreferences
+    private val PREF_ALBUM_DETAIL_SPAN_COUNT = "album_detail_span_count"
+    private val DEFAULT_SPAN_COUNT = 4
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -33,6 +39,10 @@ class AlbumViewer: AppCompatActivity(){
             fetchMediaFilesFromFolder(folderName).toMutableList()
         }
         mediaFiles.sortByDescending { it.dateAdded ?: 0L }
+
+        // Initialize SharedPreferences
+        sharedPreferences = getSharedPreferences("gallery_prefs", Context.MODE_PRIVATE)
+
         setupRecyclerView(mediaFiles, folderName)
 
         // Calculate and display counts
@@ -49,11 +59,45 @@ class AlbumViewer: AppCompatActivity(){
     }
 
     fun setupRecyclerView(mediaFiles: MutableList<MediaFile>, folderName: String?){
-        getSupportActionBar()!!.title = folderName
+        getSupportActionBar()?.title = folderName
         Log.e("AlbumError",mediaFiles.size.toString())
         adapter = MediaAdapter(mediaFiles)
-        binding.recyclerView.layoutManager = GridLayoutManager(this, 4)
+
+        // Load saved span count
+        val savedSpanCount = sharedPreferences.getInt(PREF_ALBUM_DETAIL_SPAN_COUNT, DEFAULT_SPAN_COUNT)
+
+        binding.recyclerView.layoutManager = GridLayoutManager(this, savedSpanCount)
         binding.recyclerView.adapter = adapter
+        setupPinchToZoom(savedSpanCount)
+    }
+
+    private fun setupPinchToZoom(savedSpanCount: Int) {
+        pinchHelper = PinchToZoomHelper(
+            context = this,
+            recyclerView = binding.recyclerView,
+            minSpanCount = 2,
+            maxSpanCount = 9,
+            currentSpanCount = savedSpanCount,
+            onSpanCountChanged = { newSpanCount ->
+                // Save the new span count
+                sharedPreferences.edit()
+                    .putInt(PREF_ALBUM_DETAIL_SPAN_COUNT, newSpanCount)
+                    .apply()
+            }
+        )
+
+        // Intercept touch events
+        binding.recyclerView.addOnItemTouchListener(object : RecyclerView.OnItemTouchListener {
+            override fun onInterceptTouchEvent(rv: RecyclerView, e: MotionEvent): Boolean {
+                return pinchHelper.onTouchEvent(e)
+            }
+
+            override fun onTouchEvent(rv: RecyclerView, e: MotionEvent) {
+                pinchHelper.onTouchEvent(e)
+            }
+
+            override fun onRequestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {}
+        })
     }
 
     private fun fetchMediaFilesFromFolder(folderName: String?): List<MediaFile> {

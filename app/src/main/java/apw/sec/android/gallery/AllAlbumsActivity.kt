@@ -1,5 +1,6 @@
 package apw.sec.android.gallery
 
+import android.R.attr.gravity
 import android.os.Bundle
 import android.view.Menu
 import android.view.MenuItem
@@ -12,6 +13,9 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.cardview.widget.CardView
 import androidx.recyclerview.widget.GridLayoutManager
+import android.view.MotionEvent
+import androidx.recyclerview.widget.RecyclerView
+import apw.sec.android.gallery.utils.PinchToZoomHelper
 import apw.sec.android.gallery.databinding.ActivityAllAlbumsBinding
 import com.google.android.material.bottomnavigation.BottomNavigationView
 
@@ -26,11 +30,18 @@ class AllAlbumsActivity : AppCompatActivity() {
     private var isUpdatingCount = false
     private var pickGroupMode = false
     private var currentSortIndex = 0
+    private lateinit var pinchHelper: PinchToZoomHelper
+    private lateinit var sharedPreferences: android.content.SharedPreferences
+    private val PREF_ALL_ALBUMS_SPAN_COUNT = "all_albums_span_count"
+    private val DEFAULT_SPAN_COUNT = 3
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityAllAlbumsBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        // Initialize SharedPreferences
+        sharedPreferences = getSharedPreferences("gallery_prefs", MODE_PRIVATE)
 
         //Load saved sort preference
         currentSortIndex = loadSortIndex()
@@ -47,7 +58,10 @@ class AllAlbumsActivity : AppCompatActivity() {
         //Apply saved sort type
         adapter.setSortType(getSortTypeFromIndex(currentSortIndex))
 
-        binding.recyclerView.layoutManager = GridLayoutManager(this, 3)
+        // Load saved span count
+        val savedSpanCount = sharedPreferences.getInt(PREF_ALL_ALBUMS_SPAN_COUNT, DEFAULT_SPAN_COUNT)
+
+        binding.recyclerView.layoutManager = GridLayoutManager(this, savedSpanCount)
         binding.recyclerView.adapter = adapter
         binding.toolbar.setNavigationButtonAsBack()
 
@@ -59,6 +73,7 @@ class AllAlbumsActivity : AppCompatActivity() {
         setupBottomActionBar()
         setupSelectionListener()
         setupBackPress()
+        setupPinchToZoom(savedSpanCount)
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
@@ -85,6 +100,35 @@ class AllAlbumsActivity : AppCompatActivity() {
             }
             else -> super.onOptionsItemSelected(item)
         }
+    }
+
+    private fun setupPinchToZoom(savedSpanCount: Int) {
+        pinchHelper = PinchToZoomHelper(
+            context = this,
+            recyclerView = binding.recyclerView,
+            minSpanCount = 1,
+            maxSpanCount = 3,
+            currentSpanCount = savedSpanCount,
+            onSpanCountChanged = { newSpanCount ->
+                // Save the new span count
+                sharedPreferences.edit()
+                    .putInt(PREF_ALL_ALBUMS_SPAN_COUNT, newSpanCount)
+                    .apply()
+            }
+        )
+
+        // Intercept touch events
+        binding.recyclerView.addOnItemTouchListener(object : RecyclerView.OnItemTouchListener {
+            override fun onInterceptTouchEvent(rv: RecyclerView, e: MotionEvent): Boolean {
+                return pinchHelper.onTouchEvent(e)
+            }
+
+            override fun onTouchEvent(rv: RecyclerView, e: MotionEvent) {
+                pinchHelper.onTouchEvent(e)
+            }
+
+            override fun onRequestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {}
+        })
     }
 
     private fun showSortDialog() {

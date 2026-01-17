@@ -24,6 +24,7 @@
     import apw.sec.android.gallery.AlbumItem
     import apw.sec.android.gallery.databinding.ActivityMainBinding
     import apw.sec.android.gallery.AlbumSortType
+    import apw.sec.android.gallery.utils.PinchToZoomHelper
     import com.google.android.material.bottomnavigation.BottomNavigationView
     import com.jaredrummler.android.colorpicker.ColorPickerDialog
     import com.jaredrummler.android.colorpicker.ColorPickerDialogListener
@@ -326,9 +327,16 @@
         }
 
         companion object {
+// Replace your existing MainFrag class in MainActivity.kt with this:
+
             class MainFrag : Fragment() {
                 private lateinit var mediaList: MutableList<MediaFile>
                 private lateinit var adapter: MediaAdapter
+                private lateinit var pinchHelper: PinchToZoomHelper
+                private lateinit var sharedPreferences: android.content.SharedPreferences
+
+                private val PREF_PICTURES_SPAN_COUNT = "pictures_span_count"
+                private val DEFAULT_SPAN_COUNT = 4
 
                 override fun onCreateView(
                     inflater: LayoutInflater, container: ViewGroup?,
@@ -351,10 +359,48 @@
 
                 override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
                     super.onViewCreated(view, savedInstanceState)
+
+                    sharedPreferences = requireContext().getSharedPreferences("gallery_prefs", Context.MODE_PRIVATE)
                     val recyclerView = view.findViewById<RecyclerView>(R.id.recycler_view)
-                    recyclerView.layoutManager = GridLayoutManager(context, 4)
+
+                    // Load saved span count
+                    val savedSpanCount = sharedPreferences.getInt(PREF_PICTURES_SPAN_COUNT, DEFAULT_SPAN_COUNT)
+
+                    recyclerView.layoutManager = GridLayoutManager(context, savedSpanCount)
                     loadImages()
                     recyclerView.adapter = adapter
+
+                    // Setup pinch-to-zoom
+                    setupPinchToZoom(recyclerView, savedSpanCount)
+                }
+
+                private fun setupPinchToZoom(recyclerView: RecyclerView, savedSpanCount: Int) {
+                    pinchHelper = PinchToZoomHelper(
+                        context = requireContext(),
+                        recyclerView = recyclerView,
+                        minSpanCount = 2,
+                        maxSpanCount = 6,
+                        currentSpanCount = savedSpanCount,
+                        onSpanCountChanged = { newSpanCount ->
+                            // Save the new span count
+                            sharedPreferences.edit()
+                                .putInt(PREF_PICTURES_SPAN_COUNT, newSpanCount)
+                                .apply()
+                        }
+                    )
+
+                    // Intercept touch events
+                    recyclerView.addOnItemTouchListener(object : RecyclerView.OnItemTouchListener {
+                        override fun onInterceptTouchEvent(rv: RecyclerView, e: MotionEvent): Boolean {
+                            return pinchHelper.onTouchEvent(e)
+                        }
+
+                        override fun onTouchEvent(rv: RecyclerView, e: MotionEvent) {
+                            pinchHelper.onTouchEvent(e)
+                        }
+
+                        override fun onRequestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {}
+                    })
                 }
 
                 private fun loadImages() {
@@ -363,7 +409,6 @@
                     adapter = MediaAdapter(mediaList)
                 }
             }
-
             class Search : Fragment() {
                 private var mediaList: List<MediaFile>? = null
                 private lateinit var adapter: SearchAdapter
@@ -417,6 +462,10 @@
 
                 private lateinit var bottomActionCard: CardView
                 private lateinit var bottomActionNav: BottomNavigationView
+                private lateinit var pinchHelper: PinchToZoomHelper
+                private lateinit var sharedPreferences: android.content.SharedPreferences
+                private val PREF_ALBUMS_SPAN_COUNT = "albums_span_count"
+                private val DEFAULT_SPAN_COUNT = 3
 
                 override fun onCreateView(
                     inflater: LayoutInflater, container: ViewGroup?,
@@ -431,7 +480,11 @@
                     toolbarLayout = (requireActivity() as MainActivity).binding.toolbarLayout
                     val recyclerView = view.findViewById<RecyclerView>(R.id.recycler_view)
 
-                    val gridLayoutManager = GridLayoutManager(context, 3)
+                    // MODIFY THIS SECTION:
+                    sharedPreferences = requireContext().getSharedPreferences("gallery_prefs", Context.MODE_PRIVATE)
+                    val savedSpanCount = sharedPreferences.getInt(PREF_ALBUMS_SPAN_COUNT, DEFAULT_SPAN_COUNT)
+
+                    val gridLayoutManager = GridLayoutManager(context, savedSpanCount)
                     recyclerView.layoutManager = gridLayoutManager
 
                     showOnlyEssential = PreferenceManager.getDefaultSharedPreferences(requireContext())
@@ -451,13 +504,15 @@
                     gridLayoutManager.spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
                         override fun getSpanSize(position: Int): Int {
                             return when (concatAdapter.getItemViewType(position)) {
-                                headerAdapter.getItemViewType(0) -> 3
+                                headerAdapter.getItemViewType(0) -> savedSpanCount  // Changed from hardcoded 3
                                 else -> 1
                             }
                         }
                     }
 
                     recyclerView.adapter = concatAdapter
+
+                    setupPinchToZoom(recyclerView, gridLayoutManager, savedSpanCount)
 
                     setupBottomActionBar()
 
@@ -509,6 +564,50 @@
                             ?: AlbumSortType.CUSTOM
                         adapter.setSortType(sortType)
                     }
+                }
+
+                private fun setupPinchToZoom(
+                    recyclerView: RecyclerView,
+                    gridLayoutManager: GridLayoutManager,
+                    savedSpanCount: Int
+                ) {
+                    pinchHelper = PinchToZoomHelper(
+                        context = requireContext(),
+                        recyclerView = recyclerView,
+                        minSpanCount = 1,
+                        maxSpanCount = 3,
+                        currentSpanCount = savedSpanCount,
+                        onSpanCountChanged = { newSpanCount ->
+                            // Save the new span count
+                            sharedPreferences.edit()
+                                .putInt(PREF_ALBUMS_SPAN_COUNT, newSpanCount)
+                                .apply()
+
+                            // Update header span size
+                            gridLayoutManager.spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
+                                override fun getSpanSize(position: Int): Int {
+                                    val concatAdapter = recyclerView.adapter as? ConcatAdapter
+                                    return when (concatAdapter?.getItemViewType(position)) {
+                                        headerAdapter.getItemViewType(0) -> newSpanCount
+                                        else -> 1
+                                    }
+                                }
+                            }
+                        }
+                    )
+
+                    // Intercept touch events
+                    recyclerView.addOnItemTouchListener(object : RecyclerView.OnItemTouchListener {
+                        override fun onInterceptTouchEvent(rv: RecyclerView, e: MotionEvent): Boolean {
+                            return pinchHelper.onTouchEvent(e)
+                        }
+
+                        override fun onTouchEvent(rv: RecyclerView, e: MotionEvent) {
+                            pinchHelper.onTouchEvent(e)
+                        }
+
+                        override fun onRequestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {}
+                    })
                 }
 
                 private fun setupBottomActionBar() {

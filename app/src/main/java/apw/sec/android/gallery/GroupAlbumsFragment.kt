@@ -13,11 +13,18 @@ import apw.sec.android.gallery.R
 import dev.oneuiproject.oneui.layout.ToolbarLayout
 import apw.sec.android.gallery.AlbumRepository
 import apw.sec.android.gallery.GroupAlbumAdapter
+import android.view.MotionEvent
+import android.content.Context
+import apw.sec.android.gallery.utils.PinchToZoomHelper
 
 
 class GroupAlbumsFragment : Fragment() {
 
     private var albums: List<AlbumItem.Album> = emptyList()
+    private lateinit var pinchHelper: PinchToZoomHelper
+    private lateinit var sharedPreferences: android.content.SharedPreferences
+    private val PREF_GROUP_SPAN_COUNT = "group_albums_span_count"
+    private val DEFAULT_SPAN_COUNT = 3
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -30,6 +37,8 @@ class GroupAlbumsFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
+        sharedPreferences = requireContext().getSharedPreferences("gallery_prefs", Context.MODE_PRIVATE)
+
         val groupName = requireArguments().getString(ARG_GROUP)!!
 
         val group = AlbumRepository.albumItems
@@ -39,24 +48,50 @@ class GroupAlbumsFragment : Fragment() {
         albums = group?.albums ?: emptyList()
 
         val recycler = view.findViewById<RecyclerView>(R.id.recycler_view)
-        recycler.layoutManager = GridLayoutManager(context, 3)
+
+        // Load saved span count
+        val savedSpanCount = sharedPreferences.getInt(PREF_GROUP_SPAN_COUNT, DEFAULT_SPAN_COUNT)
+
+        recycler.layoutManager = GridLayoutManager(context, savedSpanCount)
         recycler.adapter = GroupAlbumAdapter(requireContext(), albums)
 
-//        view.findViewById<View>(R.id.title_row)?.visibility = View.GONE
+        // Setup pinch-to-zoom
+        setupPinchToZoom(recycler, savedSpanCount)
 
         (activity as? GroupAlbumActivity)?.let { act ->
             val toolbarLayout = act.findViewById<ToolbarLayout>(R.id.toolbar)
-
             val subtitle = "${albums.size} album${if (albums.size != 1) "s" else ""}"
-
-            //This controls BOTH collapsed + expanded title
             toolbarLayout.setTitle(groupName)
-
-            // Subtitle
             toolbarLayout.toolbar.subtitle = subtitle
             toolbarLayout.setExpandedSubtitle(subtitle)
         }
+    }
 
+    private fun setupPinchToZoom(recyclerView: RecyclerView, savedSpanCount: Int) {
+        pinchHelper = PinchToZoomHelper(
+            context = requireContext(),
+            recyclerView = recyclerView,
+            minSpanCount = 2,
+            maxSpanCount = 4,
+            currentSpanCount = savedSpanCount,
+            onSpanCountChanged = { newSpanCount ->
+                sharedPreferences.edit()
+                    .putInt(PREF_GROUP_SPAN_COUNT, newSpanCount)
+                    .apply()
+            }
+        )
+
+        recyclerView.addOnItemTouchListener(object : RecyclerView.OnItemTouchListener {
+            override fun onInterceptTouchEvent(rv: RecyclerView, e: MotionEvent): Boolean {
+                return pinchHelper.onTouchEvent(e)
+            }
+
+            override fun onTouchEvent(rv: RecyclerView, e: MotionEvent) {
+                pinchHelper.onTouchEvent(e)
+            }
+
+            override fun onRequestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {}
+        })
     }
 
     companion object {
