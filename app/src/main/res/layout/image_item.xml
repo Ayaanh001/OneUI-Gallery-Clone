@@ -1,18 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_height="wrap_content"
     android:layout_width="match_parent"
     android:background="@drawable/image_back"
     android:layout_margin="1dp">
 
     <apw.sec.android.gallery.components.Image
-        android:layout_height="80dp"
+        android:id="@+id/imageView"
+        android:layout_height="wrap_content"
         android:layout_width="match_parent"
         android:scaleType="centerCrop"
         android:backgroundTint="@color/back"
         android:background="@color/back"
-        android:id="@+id/imageView" />
+        app:forceSquare="true" />
 
     <!-- Video duration overlay container (bottom left) -->
     <LinearLayout
@@ -45,7 +47,6 @@
             android:textSize="10sp"
             android:fontFamily="sans-serif-medium" />
     </LinearLayout>
-
 
     <!-- Center play button (kept for backward compatibility if needed) -->
     <ImageView

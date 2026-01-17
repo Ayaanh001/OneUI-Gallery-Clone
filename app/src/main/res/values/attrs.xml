@@ -2,6 +2,7 @@
 <resources>
     <declare-styleable name="Image">
         <attr name="cornerRadius" format="dimension"/>
+        <attr name="forceSquare" format="boolean" />
     </declare-styleable>
     <declare-styleable name="AlbumImage">
         <attr name="radius" format="dimension"/>

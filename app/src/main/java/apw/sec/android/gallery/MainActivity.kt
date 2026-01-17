@@ -24,6 +24,7 @@
     import apw.sec.android.gallery.AlbumItem
     import apw.sec.android.gallery.databinding.ActivityMainBinding
     import apw.sec.android.gallery.AlbumSortType
+    import apw.sec.android.gallery.utils.GridSpacingItemDecoration
     import apw.sec.android.gallery.utils.PinchToZoomHelper
     import com.google.android.material.bottomnavigation.BottomNavigationView
     import com.jaredrummler.android.colorpicker.ColorPickerDialog
@@ -334,7 +335,7 @@
                 private lateinit var adapter: MediaAdapter
                 private lateinit var pinchHelper: PinchToZoomHelper
                 private lateinit var sharedPreferences: android.content.SharedPreferences
-
+                private var itemDecoration: GridSpacingItemDecoration? = null
                 private val PREF_PICTURES_SPAN_COUNT = "pictures_span_count"
                 private val DEFAULT_SPAN_COUNT = 4
 
@@ -359,19 +360,24 @@
 
                 override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
                     super.onViewCreated(view, savedInstanceState)
-
                     sharedPreferences = requireContext().getSharedPreferences("gallery_prefs", Context.MODE_PRIVATE)
-                    val recyclerView = view.findViewById<RecyclerView>(R.id.recycler_view)
 
+                    val recyclerView = view.findViewById<RecyclerView>(R.id.recycler_view)
                     // Load saved span count
                     val savedSpanCount = sharedPreferences.getInt(PREF_PICTURES_SPAN_COUNT, DEFAULT_SPAN_COUNT)
-
                     recyclerView.layoutManager = GridLayoutManager(context, savedSpanCount)
                     loadImages()
                     recyclerView.adapter = adapter
 
-                    // Setup pinch-to-zoom
+                    updateItemDecoration(recyclerView, savedSpanCount)
                     setupPinchToZoom(recyclerView, savedSpanCount)
+                }
+
+                private fun updateItemDecoration(recyclerView: RecyclerView, spanCount: Int) {
+                    itemDecoration?.let { recyclerView.removeItemDecoration(it) }
+                    val baseSpacing = resources.getDimensionPixelSize(R.dimen.grid_spacing)
+                    itemDecoration = GridSpacingItemDecoration(spanCount, baseSpacing, includeEdge = true)
+                    recyclerView.addItemDecoration(itemDecoration!!)
                 }
 
                 private fun setupPinchToZoom(recyclerView: RecyclerView, savedSpanCount: Int) {
@@ -386,6 +392,9 @@
                             sharedPreferences.edit()
                                 .putInt(PREF_PICTURES_SPAN_COUNT, newSpanCount)
                                 .apply()
+
+                            // Update spacing decoration
+                            itemDecoration?.updateSpanCount(newSpanCount)
                         }
                     )
 
@@ -409,9 +418,15 @@
                     adapter = MediaAdapter(mediaList)
                 }
             }
+
             class Search : Fragment() {
                 private var mediaList: List<MediaFile>? = null
                 private lateinit var adapter: SearchAdapter
+                private lateinit var pinchHelper: PinchToZoomHelper
+                private lateinit var sharedPreferences: android.content.SharedPreferences
+                private var itemDecoration: GridSpacingItemDecoration? = null
+                private val PREF_SEARCH_SPAN_COUNT = "search_span_count"
+                private val DEFAULT_SPAN_COUNT = 4
 
                 override fun onCreateView(
                     inflater: LayoutInflater, container: ViewGroup?,
@@ -422,8 +437,12 @@
 
                 override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
                     super.onViewCreated(view, savedInstanceState)
+
+                    sharedPreferences = requireContext().getSharedPreferences("gallery_prefs", Context.MODE_PRIVATE)
+
                     val recyclerView = view.findViewById<RecyclerView>(R.id.recycler_view)
                     val search = view.findViewById<ApwSearch>(R.id.search)
+
                     search.setSearchViewListener(object : ApwSearch.SearchViewListener {
                         override fun onQueryTextChange(query: String) {
                             adapter.filter(query)
@@ -431,9 +450,53 @@
 
                         override fun onQueryTextSubmit(query: String) {}
                     })
-                    recyclerView.layoutManager = GridLayoutManager(context, 4)
+
+                    // Load saved span count
+                    val savedSpanCount = sharedPreferences.getInt(PREF_SEARCH_SPAN_COUNT, DEFAULT_SPAN_COUNT)
+
+                    recyclerView.layoutManager = GridLayoutManager(context, savedSpanCount)
                     loadImages()
                     recyclerView.adapter = adapter
+
+                    updateItemDecoration(recyclerView, savedSpanCount)
+                    setupPinchToZoom(recyclerView, savedSpanCount)
+                }
+
+                private fun updateItemDecoration(recyclerView: RecyclerView, spanCount: Int) {
+                    itemDecoration?.let { recyclerView.removeItemDecoration(it) }
+
+                    val baseSpacing = resources.getDimensionPixelSize(R.dimen.grid_spacing)
+                    itemDecoration = GridSpacingItemDecoration(spanCount, baseSpacing, includeEdge = true)
+                    recyclerView.addItemDecoration(itemDecoration!!)
+                }
+
+                private fun setupPinchToZoom(recyclerView: RecyclerView, savedSpanCount: Int) {
+                    pinchHelper = PinchToZoomHelper(
+                        context = requireContext(),
+                        recyclerView = recyclerView,
+                        minSpanCount = 3,
+                        maxSpanCount = 6,
+                        currentSpanCount = savedSpanCount,
+                        onSpanCountChanged = { newSpanCount ->
+                            sharedPreferences.edit()
+                                .putInt(PREF_SEARCH_SPAN_COUNT, newSpanCount)
+                                .apply()
+
+                            itemDecoration?.updateSpanCount(newSpanCount)
+                        }
+                    )
+
+                    recyclerView.addOnItemTouchListener(object : RecyclerView.OnItemTouchListener {
+                        override fun onInterceptTouchEvent(rv: RecyclerView, e: MotionEvent): Boolean {
+                            return pinchHelper.onTouchEvent(e)
+                        }
+
+                        override fun onTouchEvent(rv: RecyclerView, e: MotionEvent) {
+                            pinchHelper.onTouchEvent(e)
+                        }
+
+                        override fun onRequestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {}
+                    })
                 }
 
                 private fun loadImages() {
@@ -571,6 +634,18 @@
                     gridLayoutManager: GridLayoutManager,
                     savedSpanCount: Int
                 ) {
+                    // Set up the span size lookup to always use the GridLayoutManager's current span count
+                    gridLayoutManager.spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
+                        override fun getSpanSize(position: Int): Int {
+                            val concatAdapter = recyclerView.adapter as? ConcatAdapter
+                            return when (concatAdapter?.getItemViewType(position)) {
+                                // Always use the current span count from the GridLayoutManager
+                                headerAdapter.getItemViewType(0) -> gridLayoutManager.spanCount
+                                else -> 1
+                            }
+                        }
+                    }
+
                     pinchHelper = PinchToZoomHelper(
                         context = requireContext(),
                         recyclerView = recyclerView,
@@ -582,17 +657,6 @@
                             sharedPreferences.edit()
                                 .putInt(PREF_ALBUMS_SPAN_COUNT, newSpanCount)
                                 .apply()
-
-                            // Update header span size
-                            gridLayoutManager.spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
-                                override fun getSpanSize(position: Int): Int {
-                                    val concatAdapter = recyclerView.adapter as? ConcatAdapter
-                                    return when (concatAdapter?.getItemViewType(position)) {
-                                        headerAdapter.getItemViewType(0) -> newSpanCount
-                                        else -> 1
-                                    }
-                                }
-                            }
                         }
                     )
 

@@ -5,6 +5,7 @@ import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import kotlin.math.roundToInt
 
 class PinchToZoomHelper(
     context: Context,
@@ -15,8 +16,9 @@ class PinchToZoomHelper(
     private val onSpanCountChanged: ((Int) -> Unit)? = null
 ) {
 
-    private var scaleFactor = 1f
+    private var accumulatedScale = 1f
     private var isScaling = false
+    private var lastSpanCount = currentSpanCount
 
     private val scaleGestureDetector = ScaleGestureDetector(
         context,
@@ -24,29 +26,38 @@ class PinchToZoomHelper(
 
             override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
                 isScaling = true
+                accumulatedScale = 1f
+                lastSpanCount = currentSpanCount
                 return true
             }
 
             override fun onScale(detector: ScaleGestureDetector): Boolean {
-                scaleFactor *= detector.scaleFactor
+                // Accumulate the scale factor for smooth, real-time updates
+                accumulatedScale *= detector.scaleFactor
 
-                // Calculate new span count based on scale
-                // Pinch out (zoom in) = fewer columns
-                // Pinch in (zoom out) = more columns
-                val targetSpanCount = when {
-                    scaleFactor > 1.15f -> {
-                        scaleFactor = 1f
-                        (currentSpanCount - 1).coerceIn(minSpanCount, maxSpanCount)
+                // Calculate target span count based on accumulated scale
+                // Using a logarithmic approach for smoother transitions
+                val scaleRange = maxSpanCount - minSpanCount
+                val normalizedScale = when {
+                    accumulatedScale > 1f -> {
+                        // Zooming in (fewer columns)
+                        val zoomIn = (accumulatedScale - 1f) * 2f // Sensitivity multiplier
+                        -zoomIn.coerceIn(0f, scaleRange.toFloat())
                     }
-                    scaleFactor < 0.85f -> {
-                        scaleFactor = 1f
-                        (currentSpanCount + 1).coerceIn(minSpanCount, maxSpanCount)
+                    accumulatedScale < 1f -> {
+                        // Zooming out (more columns)
+                        val zoomOut = (1f - accumulatedScale) * 2f // Sensitivity multiplier
+                        zoomOut.coerceIn(0f, scaleRange.toFloat())
                     }
-                    else -> currentSpanCount
+                    else -> 0f
                 }
 
+                val targetSpanCount = (lastSpanCount + normalizedScale.roundToInt())
+                    .coerceIn(minSpanCount, maxSpanCount)
+
+                // Update in real-time for smooth feedback
                 if (targetSpanCount != currentSpanCount) {
-                    updateSpanCount(targetSpanCount)
+                    updateSpanCount(targetSpanCount, smooth = true)
                 }
 
                 return true
@@ -54,7 +65,9 @@ class PinchToZoomHelper(
 
             override fun onScaleEnd(detector: ScaleGestureDetector) {
                 isScaling = false
-                scaleFactor = 1f
+                accumulatedScale = 1f
+                // Final update with the current span count
+                onSpanCountChanged?.invoke(currentSpanCount)
             }
         }
     )
@@ -64,27 +77,40 @@ class PinchToZoomHelper(
         return isScaling
     }
 
-    private fun updateSpanCount(newSpanCount: Int) {
+    private fun updateSpanCount(newSpanCount: Int, smooth: Boolean = false) {
         if (currentSpanCount == newSpanCount) return
+
+        val layoutManager = recyclerView.layoutManager as? GridLayoutManager ?: return
+
+        // Store scroll position to maintain it during transition
+        val firstVisiblePosition = layoutManager.findFirstVisibleItemPosition()
+        val firstVisibleView = layoutManager.findViewByPosition(firstVisiblePosition)
+        val offset = firstVisibleView?.top ?: 0
 
         currentSpanCount = newSpanCount
 
-        // Update RecyclerView's GridLayoutManager
-        val layoutManager = recyclerView.layoutManager as? GridLayoutManager
-        layoutManager?.spanCount = newSpanCount
+        // Update span count
+        layoutManager.spanCount = newSpanCount
 
-        // Notify callback
-        onSpanCountChanged?.invoke(newSpanCount)
+        if (smooth) {
+            // Smooth, immediate update for real-time feedback
+            recyclerView.adapter?.notifyItemRangeChanged(0, recyclerView.adapter?.itemCount ?: 0)
 
-        // Smooth update
-        recyclerView.post {
-            recyclerView.adapter?.notifyDataSetChanged()
+            // Restore scroll position
+            recyclerView.post {
+                layoutManager.scrollToPositionWithOffset(firstVisiblePosition, offset)
+            }
+        } else {
+            // Standard update
+            recyclerView.post {
+                recyclerView.adapter?.notifyDataSetChanged()
+            }
         }
     }
 
     fun getCurrentSpanCount(): Int = currentSpanCount
 
     fun setSpanCount(spanCount: Int) {
-        updateSpanCount(spanCount.coerceIn(minSpanCount, maxSpanCount))
+        updateSpanCount(spanCount.coerceIn(minSpanCount, maxSpanCount), smooth = false)
     }
 }
