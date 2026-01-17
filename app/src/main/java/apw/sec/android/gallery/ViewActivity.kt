@@ -38,6 +38,10 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import android.view.KeyEvent
 import androidx.media3.common.util.UnstableApi
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
+import android.os.Build
 
 @UnstableApi
 class ViewActivity : AppCompatActivity() {
@@ -58,6 +62,35 @@ class ViewActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private var isUpdatingSeekBar = false
     private var hasUserUnmuted = false
+
+    // Audio focus properties
+    private var audioManager: AudioManager? = null
+    private var audioFocusRequest: AudioFocusRequest? = null
+    private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+        when (focusChange) {
+            AudioManager.AUDIOFOCUS_LOSS -> {
+                // Permanent loss of audio focus - pause playback
+                exoPlayer?.pause()
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                // Temporary loss of audio focus - pause playback
+                exoPlayer?.pause()
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                // Temporary loss of audio focus but can duck (lower volume)
+                if (hasUserUnmuted) {
+                    exoPlayer?.volume = 0.3f
+                }
+            }
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                // Regained audio focus - restore volume
+                if (hasUserUnmuted) {
+                    exoPlayer?.volume = 1f
+                }
+            }
+        }
+    }
+
     companion object {
         // Static variable to persist unmute state across activity instances
         private var sessionUnmuteState = false
@@ -67,6 +100,9 @@ class ViewActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         _binding = ActivityViewBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        // Initialize audio manager
+        initializeAudioManager()
 
         binding.fabBack.setOnClickListener { finishWithAnimation() }
 
@@ -267,6 +303,7 @@ class ViewActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        abandonAudioFocus()
         stopSeekBarUpdate()
         seekBarAnimator?.cancel()
         seekBarAnimator = null
@@ -281,29 +318,69 @@ class ViewActivity : AppCompatActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        when (keyCode) {
-            KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                // Only handle if current item is a video and player is muted
-                val currentPosition = binding.viewPager.currentItem
-                val mediaFile = imageList[currentPosition]
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
 
-                if (isVideoFile(mediaFile.uri.toUri())) {
-                    exoPlayer?.let { player ->
-                        if (player.volume == 0f) {
-                            // Unmute the video
+            val currentPosition = binding.viewPager.currentItem
+            val mediaFile = imageList[currentPosition]
+
+            if (isVideoFile(mediaFile.uri.toUri())) {
+                exoPlayer?.let { player ->
+                    if (player.volume == 0f) {
+                        if (requestAudioFocus()) {
                             player.volume = 1f
                             hasUserUnmuted = true
                             sessionUnmuteState = true
                             binding.videoMuteButton.setImageResource(R.drawable.oui_sound_on)
-
-                            // Let the system handle the actual volume adjustment
-                            return super.onKeyDown(keyCode, event)
                         }
+                        return true
                     }
                 }
             }
         }
         return super.onKeyDown(keyCode, event)
+    }
+
+    private fun initializeAudioManager() {
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    }
+
+    private fun requestAudioFocus(): Boolean {
+        audioManager?.let { manager ->
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val audioAttributes = AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                    .build()
+
+                audioFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(audioAttributes)
+                    .setOnAudioFocusChangeListener(audioFocusChangeListener)
+                    .build()
+
+                val result = manager.requestAudioFocus(audioFocusRequest!!)
+                result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            } else {
+                @Suppress("DEPRECATION")
+                val result = manager.requestAudioFocus(
+                    audioFocusChangeListener,
+                    AudioManager.STREAM_MUSIC,
+                    AudioManager.AUDIOFOCUS_GAIN
+                )
+                result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            }
+        }
+        return false
+    }
+
+    private fun abandonAudioFocus() {
+        audioManager?.let { manager ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                audioFocusRequest?.let { manager.abandonAudioFocusRequest(it) }
+            } else {
+                @Suppress("DEPRECATION")
+                manager.abandonAudioFocus(audioFocusChangeListener)
+            }
+        }
     }
 
     private fun initializePlayer() {
@@ -346,6 +423,9 @@ class ViewActivity : AppCompatActivity() {
                     player.pause()
                 } else {
                     player.play()
+                    if (hasUserUnmuted) {
+                        requestAudioFocus()
+                    }
                 }
             }
         }
@@ -354,18 +434,24 @@ class ViewActivity : AppCompatActivity() {
         binding.videoMuteButton.setOnClickListener {
             exoPlayer?.let { player ->
                 if (player.volume > 0f) {
+                    // MUTING
                     player.volume = 0f
                     hasUserUnmuted = false
                     sessionUnmuteState = false
+                    abandonAudioFocus()
                     binding.videoMuteButton.setImageResource(R.drawable.one_sound_off)
                 } else {
-                    player.volume = 1f
-                    hasUserUnmuted = true
-                    sessionUnmuteState = true
-                    binding.videoMuteButton.setImageResource(R.drawable.oui_sound_on)
+                    // UNMUTING
+                    if (requestAudioFocus()) {
+                        player.volume = 1f
+                        hasUserUnmuted = true
+                        sessionUnmuteState = true
+                        binding.videoMuteButton.setImageResource(R.drawable.oui_sound_on)
+                    }
                 }
             }
         }
+
 
         // SeekBar
         binding.videoSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -420,11 +506,13 @@ class ViewActivity : AppCompatActivity() {
             // Always hide video controls for images
             binding.videoControlsContainer.visibility = View.GONE
         }
-        updateMenuVisibility()
     }
     private fun playVideo(videoUri: Uri) {
         if (currentVideoUri == videoUri) {
             exoPlayer?.play()
+            if (hasUserUnmuted) {
+                requestAudioFocus()
+            }
             attachVideoSurface()
             return
         }
@@ -441,7 +529,12 @@ class ViewActivity : AppCompatActivity() {
                 attachVideoSurface()
             }, 100)
 
+            // Request audio focus before setting playWhenReady
             player.playWhenReady = true
+
+            if (hasUserUnmuted) {
+                requestAudioFocus()
+            }
 
             // Set volume based on session state
             if (hasUserUnmuted) {
@@ -470,6 +563,7 @@ class ViewActivity : AppCompatActivity() {
             })
         }
     }
+
     private fun attachVideoSurface() {
         exoPlayer?.let { player ->
             val currentPosition = binding.viewPager.currentItem
@@ -523,6 +617,7 @@ class ViewActivity : AppCompatActivity() {
     }
 
     private fun stopVideo() {
+        abandonAudioFocus()
         exoPlayer?.stop()
         exoPlayer?.clearMediaItems()
         currentVideoUri = null
@@ -684,6 +779,7 @@ class ViewActivity : AppCompatActivity() {
             }
         context.startActivity(Intent.createChooser(shareIntent, "Share Image"))
     }
+
     fun editImage(context: Context, imageUri: Uri) {
         try {
             var intent = Intent(Intent.ACTION_EDIT)
