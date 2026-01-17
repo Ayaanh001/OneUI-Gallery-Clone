@@ -51,6 +51,12 @@
             app:showAsAction="always"
             android:title="Set as wallpaper"
             app:iconTint="?actionMenuTextColor" />
+
+        <item
+            android:id="@+id/openwith"
+            app:showAsAction="always"
+            android:title="Open with"
+            app:iconTint="?actionMenuTextColor" />
     </group>
 
     <group android:id="@+id/menu_group_details">

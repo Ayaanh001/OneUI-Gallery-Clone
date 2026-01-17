@@ -162,6 +162,7 @@ class ViewActivity : AppCompatActivity() {
                     filmstripAdapter.setSelectedPosition(position)
                     binding.filmStripRecyclerView.smoothScrollToPosition(position)
                     handleMediaChange(position)
+                    updateMenuVisibility()
                 }
 
                 override fun onPageScrollStateChanged(state: Int) {
@@ -181,6 +182,7 @@ class ViewActivity : AppCompatActivity() {
         // Handle initial media
         handler.postDelayed({
             handleMediaChange(startPosition)
+            updateMenuVisibility()
         }, 150)
 
         binding.bottomBar.seslSetGroupDividerEnabled(true)
@@ -236,6 +238,11 @@ class ViewActivity : AppCompatActivity() {
                 R.id.print -> {
                     val pos = binding.viewPager.currentItem
                     print(imageList[pos].uri.toUri())
+                    true
+                }
+                R.id.openwith -> {
+                    val pos = binding.viewPager.currentItem
+                    openWith(imageList[pos].uri.toUri())
                     true
                 }
                 else -> false
@@ -413,6 +420,7 @@ class ViewActivity : AppCompatActivity() {
             // Always hide video controls for images
             binding.videoControlsContainer.visibility = View.GONE
         }
+        updateMenuVisibility()
     }
     private fun playVideo(videoUri: Uri) {
         if (currentVideoUri == videoUri) {
@@ -562,6 +570,16 @@ class ViewActivity : AppCompatActivity() {
         val minutes = totalSeconds / 60
         val seconds = totalSeconds % 60
         return String.format("%d:%02d", minutes, seconds)
+    }
+
+    private fun updateMenuVisibility() {
+        val currentPosition = binding.viewPager.currentItem
+        val mediaFile = imageList[currentPosition]
+        val isVideo = isVideoFile(mediaFile.uri.toUri())
+
+        // Get the menu item and show/hide based on media type
+        val menu = binding.bottomBar.menu
+        menu.findItem(R.id.openwith)?.isVisible = isVideo
     }
 
     //Rename functions
@@ -720,6 +738,20 @@ class ViewActivity : AppCompatActivity() {
         } catch (e: Exception) {
             e.printStackTrace()
             Toast.makeText(this, "Unable to set wallpaper", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun openWith(uri: Uri) {
+        try {
+            val mimeType = contentResolver.getType(uri) ?: "*/*"
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mimeType)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(intent, "Open with"))
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, "No app found to open this file", Toast.LENGTH_SHORT).show()
         }
     }
 
